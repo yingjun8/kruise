@@ -1,0 +1,43 @@
+# 示例：Advanced DaemonSet 使用节点标签补丁功能
+apiVersion: apps.kruise.io/v1beta1
+kind: DaemonSet
+metadata:
+  name: nydus-daemonset
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: nydus
+  template:
+    metadata:
+      labels:
+        app: nydus
+    spec:
+      containers:
+      - name: nydusd
+        image: openkruise/nydus:latest
+        env:
+        - name: LOCAL_CACHE_SIZE
+          value: "500Gi"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "100m"
+  patches:
+  - selector:
+      matchLabels:
+        node-role/nydus-storage: large
+    priority: 100
+    patch:
+      spec:
+        containers:
+        - name: nydusd
+          env:
+          - name: LOCAL_CACHE_SIZE
+            value: "2Ti"
+          - name: FEATURE_GATE_LARGE_DISK
+            value: "true"
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1

@@ -164,6 +164,78 @@ spec:
                   is ready).
                 format: int32
                 type: integer
+              patches:
+                description: |-
+                  Patches defines a list of patches to apply to the pod template
+                  based on node label matching
+                items:
+                  description: DaemonSetPatch defines a patch to apply when node labels
+                    match the selector
+                  properties:
+                    patch:
+                      description: |-
+                        Patch contains the patch to apply to the pod template
+                        The patch follows Kubernetes strategic merge patch format
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    priority:
+                      description: |-
+                        Priority defines the order of patch application when multiple patches match
+                        Higher values have higher priority
+                      format: int32
+                      type: integer
+                    selector:
+                      description: Selector is a label query over nodes that should
+                        match this patch
+                      properties:
+                        matchExpressions:
+                          description: matchExpressions is a list of label selector
+                            requirements. The requirements are ANDed.
+                          items:
+                            description: |-
+                              A label selector requirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the label key that the selector
+                                  applies to.
+                                type: string
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists and DoesNotExist.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. This array is replaced during a strategic
+                                  merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchLabels:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                            map is equivalent to an element of matchExpressions, whose key field is "key", the
+                            operator is "In", and the values array contains only "value". The requirements are ANDed.
+                          type: object
+                      type: object
+                      x-kubernetes-map-type: atomic
+                  required:
+                  - patch
+                  - selector
+                  type: object
+                type: array
               revisionHistoryLimit:
                 description: |-
                   The number of old history to retain to allow rollback.
@@ -612,6 +684,78 @@ spec:
                   is ready).
                 format: int32
                 type: integer
+              patches:
+                description: |-
+                  Patches defines a list of patches to apply to the pod template
+                  based on node label matching
+                items:
+                  description: DaemonSetPatch defines a patch to apply when node labels
+                    match the selector
+                  properties:
+                    patch:
+                      description: |-
+                        Patch contains the patch to apply to the pod template
+                        The patch follows Kubernetes strategic merge patch format
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    priority:
+                      description: |-
+                        Priority defines the order of patch application when multiple patches match
+                        Higher values have higher priority
+                      format: int32
+                      type: integer
+                    selector:
+                      description: Selector is a label query over nodes that should
+                        match this patch
+                      properties:
+                        matchExpressions:
+                          description: matchExpressions is a list of label selector
+                            requirements. The requirements are ANDed.
+                          items:
+                            description: |-
+                              A label selector requirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the label key that the selector
+                                  applies to.
+                                type: string
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists and DoesNotExist.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. This array is replaced during a strategic
+                                  merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchLabels:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                            map is equivalent to an element of matchExpressions, whose key field is "key", the
+                            operator is "In", and the values array contains only "value". The requirements are ANDed.
+                          type: object
+                      type: object
+                      x-kubernetes-map-type: atomic
+                  required:
+                  - patch
+                  - selector
+                  type: object
+                type: array
               revisionHistoryLimit:
                 description: |-
                   The number of old history to retain to allow rollback.

@@ -99,7 +99,7 @@ func nodeInSameCondition(old []corev1.NodeCondition, cur []corev1.NodeCondition)
 //     Returns true when a daemonset should continue running on a node if a daemonset pod is already
 //     running on that node.
 func nodeShouldRunDaemonPod(node *corev1.Node, ds *appsv1beta1.DaemonSet) (bool, bool) {
-	pod := NewPod(ds, node.Name)
+	pod := NewPod(ds, node.Name, node)
 
 	// If the daemon set specifies a node name, check that it matches with node.Name.
 	if !(ds.Spec.Template.Spec.NodeName == "" || ds.Spec.Template.Spec.NodeName == node.Name) {

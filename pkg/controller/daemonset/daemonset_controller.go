@@ -19,6 +19,7 @@ package daemonset
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"reflect"
@@ -35,6 +36,7 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	intstrutil "k8s.io/apimachinery/pkg/util/intstr"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientset "k8s.io/client-go/kubernetes"
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
@@ -490,8 +492,8 @@ func isControlledByDaemonSet(p *corev1.Pod, uuid types.UID) bool {
 	return false
 }
 
-// NewPod creates a new pod
-func NewPod(ds *appsv1beta1.DaemonSet, nodeName string) *corev1.Pod {
+// NewPod creates a new pod with patches applied based on node labels
+func NewPod(ds *appsv1beta1.DaemonSet, nodeName string, node *corev1.Node) *corev1.Pod {
 	// firstly load the cache before lock
 	if pod := loadNewPodForDS(ds); pod != nil {
 		return pod
@@ -505,7 +507,23 @@ func NewPod(ds *appsv1beta1.DaemonSet, nodeName string) *corev1.Pod {
 		return pod
 	}
 
-	newPod := &corev1.Pod{Spec: ds.Spec.Template.Spec, ObjectMeta: ds.Spec.Template.ObjectMeta}
+	// Create base pod template
+	template := &corev1.PodTemplateSpec{
+		ObjectMeta: ds.Spec.Template.ObjectMeta,
+		Spec:       ds.Spec.Template.Spec,
+	}
+
+	// Apply patches if node information is available
+	if node != nil && len(ds.Spec.Patches) > 0 {
+		patchedTemplate, err := applyPatchesToPodTemplate(ds, node, template)
+		if err != nil {
+			klog.ErrorS(err, "Failed to apply patches to pod template", "daemonSet", klog.KObj(ds), "nodeName", nodeName)
+		} else {
+			template = patchedTemplate
+		}
+	}
+
+	newPod := &corev1.Pod{Spec: template.Spec, ObjectMeta: template.ObjectMeta}
 	newPod.Namespace = ds.Namespace
 	// no need to set nodeName
 	// newPod.Spec.NodeName = nodeName
@@ -515,6 +533,80 @@ func NewPod(ds *appsv1beta1.DaemonSet, nodeName string) *corev1.Pod {
 
 	newPodForDSCache.Store(ds.UID, &newPodForDS{generation: ds.Generation, pod: newPod})
 	return newPod
+}
+
+// applyPatchesToPodTemplate applies node label patches to the pod template
+func applyPatchesToPodTemplate(
+	ds *appsv1beta1.DaemonSet,
+	node *corev1.Node,
+	template *corev1.PodTemplateSpec,
+) (*corev1.PodTemplateSpec, error) {
+	if len(ds.Spec.Patches) == 0 {
+		return template, nil
+	}
+
+	// Sort patches by priority (higher priority first)
+	patches := make([]appsv1beta1.DaemonSetPatch, len(ds.Spec.Patches))
+	copy(patches, ds.Spec.Patches)
+	sort.Slice(patches, func(i, j int) bool {
+		return patches[i].Priority > patches[j].Priority
+	})
+
+	patchedTemplate := template.DeepCopy()
+
+	// Apply matching patches
+	for _, patch := range patches {
+		if matchesNodeSelector(node, patch.Selector) {
+			patched, err := applyStrategicMergePatch(patchedTemplate, patch.Patch.Raw)
+			if err != nil {
+				return nil, err
+			}
+			patchedTemplate = patched
+		}
+	}
+
+	return patchedTemplate, nil
+}
+
+// matchesNodeSelector checks if node labels match the selector
+func matchesNodeSelector(node *corev1.Node, selector *metav1.LabelSelector) bool {
+	if selector == nil {
+		return false
+	}
+
+	selectorInstance, err := metav1.LabelSelectorAsSelector(selector)
+	if err != nil {
+		return false
+	}
+
+	return selectorInstance.Matches(labels.Set(node.Labels))
+}
+
+// applyStrategicMergePatch applies strategic merge patch to pod template
+func applyStrategicMergePatch(template *corev1.PodTemplateSpec, patchData []byte) (*corev1.PodTemplateSpec, error) {
+	if len(patchData) == 0 {
+		return template, nil
+	}
+
+	// Convert template to JSON
+	templateJSON, err := json.Marshal(template)
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply strategic merge patch
+	patchedJSON, err := strategicpatch.StrategicMergePatch(templateJSON, patchData, &corev1.PodTemplateSpec{})
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert back to PodTemplateSpec
+	var patchedTemplate corev1.PodTemplateSpec
+	if err := json.Unmarshal(patchedJSON, &patchedTemplate); err != nil {
+		return nil, err
+	}
+
+	return &patchedTemplate, nil
 }
 
 func (dsc *ReconcileDaemonSet) updateDaemonSetStatus(ctx context.Context, ds *appsv1beta1.DaemonSet, nodeList []*corev1.Node, hash string, updateObservedGen bool) error {
@@ -720,16 +812,6 @@ func (dsc *ReconcileDaemonSet) syncNodes(ctx context.Context, ds *appsv1beta1.Da
 	if err != nil {
 		generation = nil
 	}
-	template := util.CreatePodTemplate(ds.Spec.Template, generation, hash)
-
-	if ds.Spec.UpdateStrategy.Type == appsv1beta1.RollingUpdateDaemonSetStrategyType &&
-		ds.Spec.UpdateStrategy.RollingUpdate != nil &&
-		ds.Spec.UpdateStrategy.RollingUpdate.Type == appsv1beta1.InplaceRollingUpdateType {
-		readinessGate := corev1.PodReadinessGate{
-			ConditionType: appspub.InPlaceUpdateReady,
-		}
-		template.Spec.ReadinessGates = append(template.Spec.ReadinessGates, readinessGate)
-	}
 
 	// Batch the pod creates. Batch sizes start at SlowStartInitialBatchSize
 	// and double with each successful iteration in a kind of "slow start".
@@ -748,7 +830,34 @@ func (dsc *ReconcileDaemonSet) syncNodes(ctx context.Context, ds *appsv1beta1.Da
 				defer createWait.Done()
 				var err error
 
-				podTemplate := template.DeepCopy()
+				// Get node information for patch application
+				node, err := dsc.nodeLister.Get(nodesNeedingDaemonPods[ix])
+				if err != nil {
+					klog.ErrorS(err, "Failed to get node for patch application", "nodeName", nodesNeedingDaemonPods[ix])
+					return
+				}
+
+				podTemplate := util.CreatePodTemplate(ds.Spec.Template, generation, hash)
+
+				// Apply patches to pod template
+				if len(ds.Spec.Patches) > 0 {
+					patchedTemplate, err := applyPatchesToPodTemplate(ds, node, &podTemplate)
+					if err != nil {
+						klog.ErrorS(err, "Failed to apply patches to pod template", "daemonSet", klog.KObj(ds), "nodeName", nodesNeedingDaemonPods[ix])
+					} else {
+						podTemplate = *patchedTemplate
+					}
+				}
+
+				if ds.Spec.UpdateStrategy.Type == appsv1beta1.RollingUpdateDaemonSetStrategyType &&
+					ds.Spec.UpdateStrategy.RollingUpdate != nil &&
+					ds.Spec.UpdateStrategy.RollingUpdate.Type == appsv1beta1.InplaceRollingUpdateType {
+					readinessGate := corev1.PodReadinessGate{
+						ConditionType: appspub.InPlaceUpdateReady,
+					}
+					podTemplate.Spec.ReadinessGates = append(podTemplate.Spec.ReadinessGates, readinessGate)
+				}
+
 				if scheduleDaemonSetPods {
 					// The pod's NodeAffinity will be updated to make sure the Pod is bound
 					// to the target node by default scheduler. It is safe to do so because there
@@ -761,7 +870,7 @@ func (dsc *ReconcileDaemonSet) syncNodes(ctx context.Context, ds *appsv1beta1.Da
 					podTemplate.Spec.NodeName = nodesNeedingDaemonPods[ix]
 				}
 
-				err = dsc.podControl.CreatePods(ctx, ds.Namespace, podTemplate, ds, metav1.NewControllerRef(ds, controllerKind))
+				err = dsc.podControl.CreatePods(ctx, ds.Namespace, &podTemplate, ds, metav1.NewControllerRef(ds, controllerKind))
 
 				if err != nil {
 					if errors.HasStatusCause(err, corev1.NamespaceTerminatingCause) {

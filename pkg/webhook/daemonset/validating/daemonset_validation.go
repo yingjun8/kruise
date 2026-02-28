@@ -2,6 +2,7 @@ package validating
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -11,6 +12,7 @@ import (
 	metavalidation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	appsvalidation "k8s.io/kubernetes/pkg/apis/apps/validation"
@@ -77,9 +79,66 @@ func validateDaemonSetSpec(spec *appsv1alpha1.DaemonSetSpec, fldPath *field.Path
 			allErrs = append(allErrs, field.Forbidden(fldPath.Child("lifecycle", "inPlaceUpdate"), "inPlaceUpdate hook has not supported yet"))
 		}
 	}
+
+	// Validate patches
+	allErrs = append(allErrs, validateDaemonSetPatchesV1alpha1(spec.Patches, fldPath.Child("patches"))...)
 	return allErrs
 }
 
+// validateDaemonSetPatchesV1alpha1 validates the patches configuration for v1alpha1
+func validateDaemonSetPatchesV1alpha1(patches []appsv1alpha1.DaemonSetPatch, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+
+	if len(patches) > 10 {
+		allErrs = append(allErrs, field.TooMany(fldPath, len(patches), 10))
+	}
+
+	for i, patch := range patches {
+		patchPath := fldPath.Index(i)
+		allErrs = append(allErrs, validateDaemonSetPatchV1alpha1(&patch, patchPath)...)
+	}
+
+	return allErrs
+}
+
+// validateDaemonSetPatchV1alpha1 validates a single patch configuration for v1alpha1
+func validateDaemonSetPatchV1alpha1(patch *appsv1alpha1.DaemonSetPatch, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+
+	if patch.Selector == nil {
+		allErrs = append(allErrs, field.Required(fldPath.Child("selector"), "selector is required"))
+	} else {
+		allErrs = append(allErrs, metavalidation.ValidateLabelSelector(patch.Selector, metavalidation.LabelSelectorValidationOptions{}, fldPath.Child("selector"))...)
+	}
+
+	if len(patch.Patch.Raw) == 0 {
+		allErrs = append(allErrs, field.Required(fldPath.Child("patch"), "patch is required"))
+	} else {
+		// Validate patch is valid JSON
+		var patchJSON interface{}
+		if err := json.Unmarshal(patch.Patch.Raw, &patchJSON); err != nil {
+			allErrs = append(allErrs, field.Invalid(fldPath.Child("patch"), string(patch.Patch.Raw), fmt.Sprintf("invalid JSON: %v", err)))
+		}
+
+		// Validate patch is a valid strategic merge patch for PodTemplateSpec
+		dummyTemplate := &corev1.PodTemplateSpec{
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{Name: "dummy"}},
+			},
+		}
+		dummyJSON, _ := json.Marshal(dummyTemplate)
+		_, err := strategicpatch.StrategicMergePatch(dummyJSON, patch.Patch.Raw, &corev1.PodTemplateSpec{})
+		if err != nil {
+			allErrs = append(allErrs, field.Invalid(fldPath.Child("patch"), string(patch.Patch.Raw), fmt.Sprintf("invalid strategic merge patch: %v", err)))
+		}
+	}
+
+	if patch.Priority < 0 {
+		allErrs = append(allErrs, field.Invalid(fldPath.Child("priority"), patch.Priority, "priority must be non-negative"))
+	}
+
+	return allErrs
+}
 func validateDaemonSetUpdateStrategy(strategy *appsv1alpha1.DaemonSetUpdateStrategy, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 	switch strategy.Type {
@@ -223,15 +282,72 @@ func validateDaemonSetSpecV1beta1(spec *appsv1beta1.DaemonSetSpec, fldPath *fiel
 		// zero is a valid RevisionHistoryLimit
 		allErrs = append(allErrs, corevalidation.ValidateNonnegativeField(int64(*spec.RevisionHistoryLimit), fldPath.Child("revisionHistoryLimit"))...)
 	}
-
 	if spec.Lifecycle != nil {
 		if spec.Lifecycle.InPlaceUpdate != nil {
 			allErrs = append(allErrs, field.Forbidden(fldPath.Child("lifecycle", "inPlaceUpdate"), "inPlaceUpdate hook has not supported yet"))
 		}
 	}
+
+	// Validate patches
+	allErrs = append(allErrs, validateDaemonSetPatches(spec.Patches, fldPath.Child("patches"))...)
 	return allErrs
 }
 
+// validateDaemonSetPatches validates the patches configuration
+func validateDaemonSetPatches(patches []appsv1beta1.DaemonSetPatch, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+
+	if len(patches) > 10 {
+		allErrs = append(allErrs, field.TooMany(fldPath, len(patches), 10))
+	}
+
+	for i, patch := range patches {
+		patchPath := fldPath.Index(i)
+		allErrs = append(allErrs, validateDaemonSetPatch(&patch, patchPath)...)
+	}
+
+	return allErrs
+}
+
+// validateDaemonSetPatch validates a single patch configuration
+func validateDaemonSetPatch(patch *appsv1beta1.DaemonSetPatch, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+
+	if patch.Selector == nil {
+		allErrs = append(allErrs, field.Required(fldPath.Child("selector"), "selector is required"))
+	} else {
+		allErrs = append(allErrs, metavalidation.ValidateLabelSelector(patch.Selector, metavalidation.LabelSelectorValidationOptions{}, fldPath.Child("selector"))...)
+	}
+
+	if len(patch.Patch.Raw) == 0 {
+		allErrs = append(allErrs, field.Required(fldPath.Child("patch"), "patch is required"))
+	} else {
+		// Validate patch is valid JSON
+		var patchJSON interface{}
+		if err := json.Unmarshal(patch.Patch.Raw, &patchJSON); err != nil {
+			allErrs = append(allErrs, field.Invalid(fldPath.Child("patch"), string(patch.Patch.Raw), fmt.Sprintf("invalid JSON: %v", err)))
+		}
+
+		// Validate patch is a valid strategic merge patch for PodTemplateSpec
+		// We create a dummy PodTemplateSpec and try to apply the patch
+		dummyTemplate := &corev1.PodTemplateSpec{
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{Name: "dummy"}},
+			},
+		}
+		dummyJSON, _ := json.Marshal(dummyTemplate)
+		_, err := strategicpatch.StrategicMergePatch(dummyJSON, patch.Patch.Raw, &corev1.PodTemplateSpec{})
+		if err != nil {
+			allErrs = append(allErrs, field.Invalid(fldPath.Child("patch"), string(patch.Patch.Raw), fmt.Sprintf("invalid strategic merge patch: %v", err)))
+		}
+	}
+
+	if patch.Priority < 0 {
+		allErrs = append(allErrs, field.Invalid(fldPath.Child("priority"), patch.Priority, "priority must be non-negative"))
+	}
+
+	return allErrs
+}
 func validateDaemonSetUpdateStrategyV1beta1(strategy *appsv1beta1.DaemonSetUpdateStrategy, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 	switch strategy.Type {

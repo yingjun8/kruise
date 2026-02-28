@@ -20,6 +20,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	appspub "github.com/openkruise/kruise/apis/apps/pub"
@@ -163,6 +164,26 @@ type DaemonSetSpec struct {
 	// Currently, we only support pre-delete hook for Advanced DaemonSet.
 	// +optional
 	Lifecycle *appspub.Lifecycle `json:"lifecycle,omitempty"`
+
+	// Patches defines a list of patches to apply to the pod template
+	// based on node label matching
+	// +optional
+	Patches []DaemonSetPatch `json:"patches,omitempty"`
+}
+
+// DaemonSetPatch defines a patch to apply when node labels match the selector
+type DaemonSetPatch struct {
+	// Selector is a label query over nodes that should match this patch
+	Selector *metav1.LabelSelector `json:"selector"`
+
+	// Patch contains the patch to apply to the pod template
+	// The patch follows Kubernetes strategic merge patch format
+	Patch runtime.RawExtension `json:"patch"`
+
+	// Priority defines the order of patch application when multiple patches match
+	// Higher values have higher priority
+	// +optional
+	Priority int32 `json:"priority,omitempty"`
 }
 
 // DaemonSetStatus defines the observed state of DaemonSet
